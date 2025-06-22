@@ -17,49 +17,63 @@ def cargar_datos():
     return df
 
 sr_ncaa_adjusted = cargar_datos()
-
-# 1. Selección de columnas numéricas disponibles
 columnas_disponibles = sr_ncaa_adjusted.select_dtypes(include=['number']).columns.tolist()
+posiciones_disponibles = sorted(sr_ncaa_adjusted['Position'].dropna().unique())
+
+st.title("🔍 Buscador de Jugadores Similares - NCAA")
+
+jugador_seleccionado = st.selectbox("Selecciona un jugador", sorted(sr_ncaa_adjusted["Player"].unique()))
+
 metricas_seleccionadas = st.multiselect(
     "Selecciona las métricas a usar para calcular similitud (deja vacío para usar todas)",
     columnas_disponibles,
     default=columnas_disponibles
 )
-metricas_ordenadas = [col.strip() for col in metricas_seleccionadas]
-metricas_ordenadas = [col for col in metricas_ordenadas if col]
-metricas_ordenadas = sorted(metricas_ordenadas)
-st.write("🧪 Columnas utilizadas:", metricas_ordenadas)
 
-# 2. Selección de posiciones a elegir
-posiciones_disponibles = sorted(sr_ncaa_adjusted['Position'].dropna().unique())
+# ✅ Limpieza y orden alfabético de las métricas seleccionadas
+metricas_ordenadas = [col.strip() for col in metricas_seleccionadas]
+metricas_ordenadas = [col for col in metricas_ordenadas if col in columnas_disponibles]
+metricas_ordenadas = sorted(metricas_ordenadas)
+st.write("🧪 Columnas utilizadas (Streamlit):", metricas_ordenadas)
+
 posiciones_filtradas = st.multiselect(
     "Selecciona las posiciones a incluir (deja vacío para incluir todas)",
     posiciones_disponibles,
     default=posiciones_disponibles
 )
-if posiciones_filtradas:
-    df_filtrado = sr_ncaa_adjusted[sr_ncaa_adjusted["Position"].isin(posiciones_filtradas)].copy()
-else:
-    df_filtrado = sr_ncaa_adjusted[sr_ncaa_adjusted["Position"].isin(posiciones_disponibles)].copy()
-df_filtrado = df_filtrado.sort_values(by="Player").reset_index(drop=True)
 
-# 3. Selección del nombre del jugador base
-jugadores_filtrados = sorted(df_filtrado["Player"].unique())
-jugador_seleccionado = st.selectbox("Selecciona un jugador base", jugadores_filtrados)
-
-# 4. Selección del número de similares y cálculo
 num_similares = st.slider("Número de jugadores similares a mostrar", min_value=1, max_value=20, value=5)
 
 if st.button("🔎 Buscar jugadores similares"):
     try:
+        if posiciones_filtradas:
+            df_filtrado = sr_ncaa_adjusted[sr_ncaa_adjusted["Position"].isin(posiciones_filtradas)].copy()
+        else:
+            df_filtrado = sr_ncaa_adjusted.copy()
+
+        if "Player_limpio" not in df_filtrado.columns:
+            st.error("❌ 'Player_limpio' no está disponible después del filtrado.")
+            st.stop()
+
+        df_filtrado = df_filtrado.sort_values(by="Player").reset_index(drop=True)
+
         y = df_filtrado["Player"].values
+        st.write("¿Hay jugadores duplicados?:", len(y) != len(set(y)))
+        y_limpios = df_filtrado["Player_limpio"].values
+        st.write("📊 Columnas utilizadas:", metricas_ordenadas)
         X = df_filtrado[metricas_ordenadas].values
         X_std = StandardScaler().fit_transform(X)
 
-        idx = np.where(y == jugador_seleccionado)[0][0]
-        jugador_original = y[idx]
+        st.write("📐 Forma de X_std:", X_std.shape)
+        st.write("👥 Primeros 3 jugadores:", y[:3])
+        st.write("🔢 Primeros vectores normalizados:", X_std[:3])
 
-        if len(metricas_ordenadas) <= 3:
+        idx = np.where(y_limpios == jugador_seleccionado.lower())[0][0]
+        jugador_original = y[idx]
+        st.write("🎯 Jugador base:", jugador_original)
+        st.write("📊 Vector normalizado (X_std):", X_std[idx])
+
+        if len(metricas_seleccionadas) <= 3:
             from sklearn.metrics.pairwise import euclidean_distances
             dist_matrix = euclidean_distances(X_std)
             distancias = dist_matrix[idx]
@@ -80,17 +94,12 @@ if st.button("🔎 Buscar jugadores similares"):
             columns_pca = [f"PCA{i+1}" for i in range(num_componentes)]
             df_pca = pd.DataFrame(X_pca[:, :num_componentes], columns=columns_pca, index=y)
 
-            # --- ORDENAR EL ÍNDICE ---
-            df_pca = df_pca.sort_index()
-            jugador_original = jugador_original  # ya está en y, que es el índice de df_pca
+            st.write(f"🔍 Se usan {num_componentes} componentes principales para explicar el 95% de la varianza acumulada.")
 
-            # --- MATRIZ DE CORRELACIÓN ROBUSTA Y ORDENADA ---
             corr_matrix = df_pca.T.corr(method='pearson')
-            corr_matrix = corr_matrix.reindex(index=df_pca.index, columns=df_pca.index)
 
             if jugador_original not in corr_matrix.index:
-                st.error(f"❌ El jugador '{jugador_original}' no está en la matriz de correlación.")
-                st.write("Índices disponibles:", list(corr_matrix.index[:5]))
+                st.error("El jugador no se encuentra en la matriz de correlación.")
                 st.stop()
 
             row = corr_matrix.loc[jugador_original]
@@ -101,7 +110,6 @@ if st.button("🔎 Buscar jugadores similares"):
                 "Factor de correlación": similares.values
             })
 
-        # Mostrar resultados
         jugador_base = sr_ncaa_adjusted[sr_ncaa_adjusted["Player"] == jugador_original]
         jugadores_similares_df = sr_ncaa_adjusted[sr_ncaa_adjusted["Player"].isin(df_similares["Jugador similar"])]
         resultado_final = pd.concat([jugador_base, jugadores_similares_df])
@@ -112,7 +120,7 @@ if st.button("🔎 Buscar jugadores similares"):
         st.subheader("📋 Datos de los jugadores encontrados:")
         st.dataframe(resultado_final.reset_index(drop=True))
 
-        if len(metricas_ordenadas) > 3:
+        if len(metricas_seleccionadas) > 3:
             st.subheader("📈 Varianza explicada acumulada (PCA)")
             fig, ax = plt.subplots()
             ax.plot(explained_var_cumsum, marker='o')
