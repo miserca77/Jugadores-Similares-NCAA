@@ -8,11 +8,11 @@ from sklearn.preprocessing import StandardScaler
 
 @st.cache_data
 def cargar_datos():
-    df = pd.read_excel('sr_ncaa_adjusted.xlsx', engine='openpyxl')
+    df = pd.read_excel('sr_ncaa_adjusted.xlsx')
     df.loc[df.duplicated(subset=['Player'], keep=False), 'Player'] += '_' + df.groupby('Player').cumcount().astype(str)
+    df['Player'] = df['Player'].str.strip()
     df['Player'] = df['Player'].str.replace("'", "", regex=False)
     df['Player'] = df['Player'].str.replace(",", "", regex=False)
-    df['Player'] = df['Player'].str.strip()
     df['Player_limpio'] = df['Player'].str.lower()
     return df
 
@@ -30,12 +30,6 @@ metricas_seleccionadas = st.multiselect(
     default=columnas_disponibles
 )
 
-# ✅ Limpieza y orden alfabético de las métricas seleccionadas
-metricas_ordenadas = [col.strip() for col in metricas_seleccionadas]
-metricas_ordenadas = [col for col in metricas_ordenadas if col in columnas_disponibles]
-metricas_ordenadas = sorted(metricas_ordenadas)
-st.write("🧪 Columnas utilizadas (Streamlit):", metricas_ordenadas)
-
 posiciones_filtradas = st.multiselect(
     "Selecciona las posiciones a incluir (deja vacío para incluir todas)",
     posiciones_disponibles,
@@ -46,84 +40,83 @@ num_similares = st.slider("Número de jugadores similares a mostrar", min_value=
 
 if st.button("🔎 Buscar jugadores similares"):
     try:
+        # Filtrar posiciones
         if posiciones_filtradas:
             df_filtrado = sr_ncaa_adjusted[sr_ncaa_adjusted["Position"].isin(posiciones_filtradas)].copy()
         else:
             df_filtrado = sr_ncaa_adjusted.copy()
-
-        if "Player_limpio" not in df_filtrado.columns:
-            st.error("❌ 'Player_limpio' no está disponible después del filtrado.")
-            st.stop()
-
+        # 🔄 Ordenar por nombre de jugador para garantizar coherencia en y, X, etc.    
         df_filtrado = df_filtrado.sort_values(by="Player").reset_index(drop=True)
-
+            
+        # Preparar matrices
         y = df_filtrado["Player"].values
-        st.write("¿Hay jugadores duplicados?:", len(y) != len(set(y)))
-        y_limpios = df_filtrado["Player_limpio"].values
-        st.write("📊 Columnas utilizadas:", metricas_ordenadas)
+        metricas_ordenadas = sorted(metricas_seleccionadas)
         X = df_filtrado[metricas_ordenadas].values
         X_std = StandardScaler().fit_transform(X)
 
-        st.write("📐 Forma de X_std:", X_std.shape)
-        st.write("👥 Primeros 3 jugadores:", y[:3])
-        st.write("🔢 Primeros vectores normalizados:", X_std[:3])
-
-        idx = np.where(y_limpios == jugador_seleccionado.lower())[0][0]
-        jugador_original = y[idx]
-        st.write("🎯 Jugador base:", jugador_original)
-        st.write("📊 Vector normalizado (X_std):", X_std[idx])
-
+        # Caso A: pocas métricas → usar distancia euclídea
         if len(metricas_seleccionadas) <= 3:
             from sklearn.metrics.pairwise import euclidean_distances
+
             dist_matrix = euclidean_distances(X_std)
+            idx = np.where(y == jugador_seleccionado)[0][0]
             distancias = dist_matrix[idx]
             indices_ordenados = np.argsort(distancias)[1:num_similares+1]
 
+            jugadores_similares = y[indices_ordenados]
+            factores = distancias[indices_ordenados]
+
             df_similares = pd.DataFrame({
-                "Jugador similar": y[indices_ordenados],
-                "Distancia euclídea": distancias[indices_ordenados]
+                "Jugador similar": jugadores_similares,
+                "Distancia euclídea": factores
             })
 
+        # Caso B: muchas métricas → usar PCA + correlación
         else:
             pca = PCA(n_components=X_std.shape[1]-1, random_state=42)
             X_pca = pca.fit_transform(X_std)
             expl = pca.explained_variance_ratio_
+
+            # Calculamos número mínimo de componentes para explicar al menos 95% de la varianza
             explained_var_cumsum = np.cumsum(expl)
             num_componentes = np.searchsorted(explained_var_cumsum, 0.95) + 1
 
             columns_pca = [f"PCA{i+1}" for i in range(num_componentes)]
-            df_pca = pd.DataFrame(X_pca[:, :num_componentes], columns=columns_pca, index=y)
+            df_pca = pd.DataFrame(data=X_pca[:, :num_componentes], columns=columns_pca, index=y)
 
+            # Mostrar varianza explicada acumulada
             st.write(f"🔍 Se usan {num_componentes} componentes principales para explicar el 95% de la varianza acumulada.")
 
             corr_matrix = df_pca.T.corr(method='pearson')
 
-            if jugador_original not in corr_matrix.index:
+            if jugador_seleccionado not in corr_matrix.index:
                 st.error("El jugador no se encuentra en la matriz de correlación.")
                 st.stop()
 
-            row = corr_matrix.loc[jugador_original]
-            similares = row.drop(jugador_original).nlargest(num_similares)
+            row = corr_matrix.loc[jugador_seleccionado]
+            similares = row.drop(jugador_seleccionado).nlargest(num_similares)
 
             df_similares = pd.DataFrame({
                 "Jugador similar": similares.index,
                 "Factor de correlación": similares.values
             })
 
-        jugador_base = sr_ncaa_adjusted[sr_ncaa_adjusted["Player"] == jugador_original]
+        # Mostrar resultados
+        jugador_base = sr_ncaa_adjusted[sr_ncaa_adjusted["Player"] == jugador_seleccionado]
         jugadores_similares_df = sr_ncaa_adjusted[sr_ncaa_adjusted["Player"].isin(df_similares["Jugador similar"])]
         resultado_final = pd.concat([jugador_base, jugadores_similares_df])
 
-        st.subheader(f"🎯 Jugadores más similares a: {jugador_original}")
+        st.subheader(f"🎯 Jugadores más similares a: {jugador_seleccionado}")
         st.dataframe(df_similares)
 
         st.subheader("📋 Datos de los jugadores encontrados:")
         st.dataframe(resultado_final.reset_index(drop=True))
 
+        # Mostrar gráfico PCA solo si se aplicó
         if len(metricas_seleccionadas) > 3:
             st.subheader("📈 Varianza explicada acumulada (PCA)")
             fig, ax = plt.subplots()
-            ax.plot(explained_var_cumsum, marker='o')
+            ax.plot(np.cumsum(pca.explained_variance_ratio_), marker='o')
             ax.set_xlabel('Número de componentes')
             ax.set_ylabel('Varianza explicada')
             ax.grid(True)
