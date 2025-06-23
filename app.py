@@ -36,7 +36,7 @@ posiciones_filtradas = st.multiselect(
     default=posiciones_disponibles
 )
 
-num_similares = st.slider("Número de jugadores similares a mostrar", min_value=1, max_value=20, value=5)
+num_similares = st.slider("Número de jugadores similares a mostrar", min_value=1, max_value=50, value=10)
 
 if st.button("🔎 Buscar jugadores similares"):
     try:
