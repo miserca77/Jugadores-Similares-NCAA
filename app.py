@@ -13,7 +13,6 @@ def cargar_datos():
     df['Player'] = df['Player'].str.strip()
     df['Player'] = df['Player'].str.replace("'", "", regex=False)
     df['Player'] = df['Player'].str.replace(",", "", regex=False)
-    df['Player_limpio'] = df['Player'].str.lower()
     return df
 
 sr_ncaa_adjusted = cargar_datos()
@@ -40,29 +39,24 @@ num_similares = st.slider("Número de jugadores similares a mostrar", min_value=
 
 if st.button("🔎 Buscar jugadores similares"):
     try:
-        # Filtrar posiciones
         if posiciones_filtradas:
             df_filtrado = sr_ncaa_adjusted[sr_ncaa_adjusted["Position"].isin(posiciones_filtradas)].copy()
         else:
             df_filtrado = sr_ncaa_adjusted.copy()
-        # 🔄 Ordenar por nombre de jugador para garantizar coherencia en y, X, etc.    
+
         df_filtrado = df_filtrado.sort_values(by="Player").reset_index(drop=True)
-            
-        # Preparar matrices
+
         y = df_filtrado["Player"].values
         metricas_ordenadas = sorted(metricas_seleccionadas)
         X = df_filtrado[metricas_ordenadas].values
         X_std = StandardScaler().fit_transform(X)
 
-        # Caso A: pocas métricas → usar distancia euclídea
         if len(metricas_seleccionadas) <= 3:
             from sklearn.metrics.pairwise import euclidean_distances
-
             dist_matrix = euclidean_distances(X_std)
             idx = np.where(y == jugador_seleccionado)[0][0]
             distancias = dist_matrix[idx]
             indices_ordenados = np.argsort(distancias)[1:num_similares+1]
-
             jugadores_similares = y[indices_ordenados]
             factores = distancias[indices_ordenados]
 
@@ -71,20 +65,16 @@ if st.button("🔎 Buscar jugadores similares"):
                 "Distancia euclídea": factores
             })
 
-        # Caso B: muchas métricas → usar PCA + correlación
         else:
             pca = PCA(n_components=X_std.shape[1]-1, random_state=42)
             X_pca = pca.fit_transform(X_std)
             expl = pca.explained_variance_ratio_
-
-            # Calculamos número mínimo de componentes para explicar al menos 95% de la varianza
             explained_var_cumsum = np.cumsum(expl)
             num_componentes = np.searchsorted(explained_var_cumsum, 0.95) + 1
 
             columns_pca = [f"PCA{i+1}" for i in range(num_componentes)]
             df_pca = pd.DataFrame(data=X_pca[:, :num_componentes], columns=columns_pca, index=y)
 
-            # Mostrar varianza explicada acumulada
             st.write(f"🔍 Se usan {num_componentes} componentes principales para explicar el 95% de la varianza acumulada.")
 
             corr_matrix = df_pca.T.corr(method='pearson')
@@ -101,7 +91,6 @@ if st.button("🔎 Buscar jugadores similares"):
                 "Factor de correlación": similares.values
             })
 
-        # Mostrar resultados
         jugador_base = sr_ncaa_adjusted[sr_ncaa_adjusted["Player"] == jugador_seleccionado]
         jugadores_similares_df = sr_ncaa_adjusted[sr_ncaa_adjusted["Player"].isin(df_similares["Jugador similar"])]
         resultado_final = pd.concat([jugador_base, jugadores_similares_df])
@@ -112,7 +101,16 @@ if st.button("🔎 Buscar jugadores similares"):
         st.subheader("📋 Datos de los jugadores encontrados:")
         st.dataframe(resultado_final.reset_index(drop=True))
 
-        # Mostrar gráfico PCA solo si se aplicó
+        # Exportar CSV compatible con Power BI
+        csv_buffer = resultado_final.to_csv(index=False, sep=';', decimal=',').encode('utf-8')
+
+        st.download_button(
+            label="⬇️ Descargar resultados en CSV",
+            data=csv_buffer,
+            file_name="jugadores_similares.csv",
+            mime="text/csv"
+        )
+
         if len(metricas_seleccionadas) > 3:
             st.subheader("📈 Varianza explicada acumulada (PCA)")
             fig, ax = plt.subplots()
