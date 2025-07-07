@@ -23,23 +23,32 @@ posiciones_disponibles = sorted(sr_ncaa_adjusted['Position'].dropna().unique()) 
 st.title("🔍 Buscador de Jugadores Similares - NCAA")
 
 jugador_seleccionado = st.selectbox("Selecciona un jugador", sorted(sr_ncaa_adjusted["Player"].unique()))
-
 metricas_seleccionadas = st.multiselect(
     "Selecciona las métricas a usar para calcular similitud (deja vacío para usar todas)",
     columnas_disponibles,
     default=columnas_disponibles
 )
-
 posiciones_filtradas = st.multiselect(
     "Selecciona las posiciones a incluir (deja vacío para incluir todas)",
     posiciones_disponibles,
     default=posiciones_disponibles
 )
-
 num_similares = st.slider("Número de jugadores similares a mostrar", min_value=1, max_value=50, value=10)
 
 if st.button("🔎 Buscar jugadores similares"):
+    st.session_state.buscar = True
+    st.session_state.jugador_seleccionado = jugador_seleccionado
+    st.session_state.metricas_seleccionadas = metricas_seleccionadas
+    st.session_state.posiciones_filtradas = posiciones_filtradas
+    st.session_state.num_similares = num_similares
+
+if st.session_state.get("buscar"):
     try:
+        jugador_seleccionado = st.session_state.jugador_seleccionado
+        metricas_seleccionadas = st.session_state.metricas_seleccionadas
+        posiciones_filtradas = st.session_state.posiciones_filtradas
+        num_similares = st.session_state.num_similares
+
         if posiciones_filtradas:
             df_filtrado = sr_ncaa_adjusted[sr_ncaa_adjusted["Position"].isin(posiciones_filtradas)].copy()
         else:
@@ -92,7 +101,6 @@ if st.button("🔎 Buscar jugadores similares"):
                 "Factor de correlación": similares.values
             })
 
-            # Gráfico de varianza acumulada
             fig, ax = plt.subplots()
             ax.plot(explained_var_cumsum, marker='o')
             ax.set_xlabel('Número de componentes')
@@ -100,7 +108,6 @@ if st.button("🔎 Buscar jugadores similares"):
             ax.grid(True)
             st.pyplot(fig)
 
-        # Preparar dataframes base y similares
         jugador_base = sr_ncaa_adjusted[sr_ncaa_adjusted["Player"] == jugador_seleccionado]
         jugadores_similares_df = sr_ncaa_adjusted[sr_ncaa_adjusted["Player"].isin(df_similares["Jugador similar"])]
         resultado_final = pd.concat([jugador_base, jugadores_similares_df])
@@ -108,7 +115,6 @@ if st.button("🔎 Buscar jugadores similares"):
         st.subheader(f"🎯 Jugadores más similares a: {jugador_seleccionado}")
         st.dataframe(df_similares)
 
-        # Mostrar tabla con métricas seleccionadas (sin normalizar)
         st.subheader("📋 Datos de los jugadores con métricas seleccionadas:")
         columnas_a_mostrar = ["Player"]
         if "Position" in resultado_final.columns:
@@ -117,13 +123,10 @@ if st.button("🔎 Buscar jugadores similares"):
         resultado_a_mostrar = resultado_final[columnas_a_mostrar]
         st.dataframe(resultado_a_mostrar.reset_index(drop=True))
 
-        # Mostrar tabla con todas las métricas completas (sin normalizar)
         st.subheader("📋 Datos completos (todas las métricas) de los jugadores encontrados:")
         st.dataframe(resultado_final.reset_index(drop=True))
 
-        # Exportar CSV - Formato ancho sin normalizar incluyendo columna Position
         columnas_a_descargar = [col for col in resultado_final.columns if col not in ["School", "Conference"]]
-
         if "Position" not in columnas_a_descargar and "Position" in resultado_final.columns:
             columnas_a_descargar.append("Position")
 
@@ -135,7 +138,6 @@ if st.button("🔎 Buscar jugadores similares"):
         columnas_a_descargar = orden + resto_cols
 
         resultado_a_descargar = resultado_final[columnas_a_descargar]
-
         csv_buffer = resultado_a_descargar.to_csv(index=False, sep=';', decimal=',').encode('utf-8')
         st.download_button(
             label="⬇️ Descargar todos los datos en CSV (Power BI ready)",
@@ -144,7 +146,6 @@ if st.button("🔎 Buscar jugadores similares"):
             mime="text/csv"
         )
 
-        # Exportar CSV - Formato largo (tidy) solo con métricas seleccionadas
         if metricas_ordenadas:
             columnas_largas = ["Player"] + [col for col in metricas_ordenadas if col in resultado_a_descargar.columns]
             df_largo = resultado_a_descargar[columnas_largas].melt(
@@ -160,8 +161,6 @@ if st.button("🔎 Buscar jugadores similares"):
                 mime="text/csv"
             )
 
-        # Exportar datos normalizados para radar en formato largo
-        if metricas_ordenadas:
             scaler = MinMaxScaler()
             df_norm = resultado_final[["Player"] + metricas_ordenadas].copy()
             df_norm[metricas_ordenadas] = scaler.fit_transform(df_norm[metricas_ordenadas])
